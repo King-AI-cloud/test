@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "x-autopost"
+version = "0.1.0"
+description = "Claude で生成した文章を X に自動投稿する CLI ツール"
+requires-python = ">=3.10"
+dependencies = [
+    "anthropic>=1.0.0,<2",
+    "requests>=2.31",
+    "requests-oauthlib>=1.3",
+    "PyYAML>=6.0",
+]
+
+[project.scripts]
+x-autopost = "x_autopost.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
