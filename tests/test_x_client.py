@@ -35,8 +35,8 @@ class FakeSession:
         self.exc = exc
         self.calls = []
 
-    def post(self, url, **kwargs):
-        self.calls.append((url, kwargs))
+    def request(self, method, url, **kwargs):
+        self.calls.append((method, url, kwargs))
         if self.exc:
             raise self.exc
         return self.response
@@ -57,7 +57,8 @@ def test_post_tweet_returns_id():
     session = FakeSession(FakeResponse(payload={"data": {"id": "1890"}}))
     assert make_client(session).post_tweet("こんにちは") == "1890"
 
-    url, kwargs = session.calls[0]
+    method, url, kwargs = session.calls[0]
+    assert method == "POST"
     assert url == "https://api.x.com/2/tweets"
     assert kwargs["json"] == {"text": "こんにちは"}
     assert kwargs["auth"] is not None
@@ -70,9 +71,31 @@ def test_rate_limit_message():
 
 
 def test_http_error_includes_body():
-    session = FakeSession(FakeResponse(status_code=403, text="Forbidden"))
-    with pytest.raises(XApiError, match="Forbidden"):
+    session = FakeSession(FakeResponse(status_code=400, text="Bad Request"))
+    with pytest.raises(XApiError, match="Bad Request"):
         make_client(session).post_tweet("本文")
+
+
+def test_403_explains_write_permission():
+    session = FakeSession(FakeResponse(status_code=403, text="Forbidden"))
+    with pytest.raises(XApiError, match="Read and write"):
+        make_client(session).post_tweet("本文")
+
+
+def test_verify_credentials_returns_user():
+    payload = {"data": {"id": "7", "name": "テスト", "username": "test_user"}}
+    session = FakeSession(FakeResponse(status_code=200, payload=payload))
+    assert make_client(session).verify_credentials()["username"] == "test_user"
+
+    method, url, _ = session.calls[0]
+    assert method == "GET"
+    assert url == "https://api.x.com/2/users/me"
+
+
+def test_verify_credentials_rejects_empty_payload():
+    session = FakeSession(FakeResponse(status_code=200, payload={"data": {}}))
+    with pytest.raises(XApiError, match="ユーザー情報"):
+        make_client(session).verify_credentials()
 
 
 def test_missing_id_in_payload():

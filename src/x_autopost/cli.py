@@ -44,6 +44,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_post(args, config)
     if args.command == "history":
         return _cmd_history(args, config)
+    if args.command == "check":
+        return _cmd_check(config)
     parser.print_help()
     return EXIT_ERROR
 
@@ -71,6 +73,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
     history = sub.add_parser("history", help="投稿履歴を表示する")
     history.add_argument("-n", "--limit", type=int, default=10, help="表示件数 (既定: 10)")
+
+    sub.add_parser(
+        "check", help="投稿せずに、認証情報と生成が動くかを確認する（事前チェック）"
+    )
 
     return parser
 
@@ -165,6 +171,38 @@ def _generate_with_retries(
     raise GenerationError(
         f"{attempts} 回試しましたが条件を満たす文章を生成できませんでした（{last_reason}）"
     )
+
+
+def _cmd_check(config: Config) -> int:
+    """投稿せずに X 認証と Claude 生成の両方を確かめる。"""
+    ok = True
+
+    print("[1/2] X の認証を確認しています (GET /2/users/me)…")
+    try:
+        user = XClient(XCredentials.from_env()).verify_credentials()
+        print(f"      OK: @{user['username']} ({user.get('name', '')}) として認証されました")
+        print("      ※ 投稿権限(write)の有無はここでは判定できません。")
+        print("        403 で投稿に失敗する場合は App permissions とトークン再発行を確認してください。")
+    except XApiError as exc:
+        print(f"      NG: {exc}", file=sys.stderr)
+        ok = False
+
+    print("[2/2] Claude での生成を確認しています…")
+    try:
+        generator = PostGenerator(config.generation)
+        theme = generator.pick_theme()
+        text = generator.generate(theme, [])
+        print(f"      OK: テーマ「{theme}」で {len(text)} 文字を生成しました")
+        print(f"      生成結果: {text}")
+    except (GenerationError, anthropic.APIError) as exc:
+        print(f"      NG: {exc}", file=sys.stderr)
+        ok = False
+
+    if ok:
+        print("\nすべて問題ありません。`post` で実際に投稿できます。")
+        return EXIT_OK
+    print("\n未解決の問題があります。上の NG を確認してください。", file=sys.stderr)
+    return EXIT_ERROR
 
 
 def _cmd_history(args: argparse.Namespace, config: Config) -> int:

@@ -9,6 +9,7 @@ import requests
 from requests_oauthlib import OAuth1
 
 TWEETS_ENDPOINT = "https://api.x.com/2/tweets"
+USERS_ME_ENDPOINT = "https://api.x.com/2/users/me"
 
 # X の文字数カウントは全角/絵文字を2文字として数える（twitter-text の重み設定）。
 X_MAX_WEIGHTED_LENGTH = 280
@@ -69,15 +70,35 @@ class XClient:
     def post_tweet(self, text: str) -> str:
         """投稿してツイートIDを返す。"""
         validate_length(text)
-        auth = OAuth1(
+        payload = self._request("POST", TWEETS_ENDPOINT, json={"text": text}, action="投稿")
+        tweet_id = (payload.get("data") or {}).get("id")
+        if not tweet_id:
+            raise XApiError(f"応答にツイートIDが含まれていません: {payload}")
+        return str(tweet_id)
+
+    def verify_credentials(self) -> dict:
+        """GET /2/users/me を呼び、認証が通るか確かめる（投稿はしない）。
+
+        戻り値は `{"id": ..., "name": ..., "username": ...}`。
+        """
+        payload = self._request("GET", USERS_ME_ENDPOINT, action="認証確認")
+        data = payload.get("data") or {}
+        if not data.get("username"):
+            raise XApiError(f"応答にユーザー情報が含まれていません: {payload}")
+        return data
+
+    def _auth(self) -> OAuth1:
+        return OAuth1(
             self.credentials.api_key,
             client_secret=self.credentials.api_secret,
             resource_owner_key=self.credentials.access_token,
             resource_owner_secret=self.credentials.access_token_secret,
         )
+
+    def _request(self, method: str, url: str, action: str, **kwargs) -> dict:
         try:
-            response = self.session.post(
-                TWEETS_ENDPOINT, json={"text": text}, auth=auth, timeout=self.timeout
+            response = self.session.request(
+                method, url, auth=self._auth(), timeout=self.timeout, **kwargs
             )
         except requests.RequestException as exc:
             raise XApiError(f"X API への接続に失敗しました: {exc}") from exc
@@ -88,14 +109,16 @@ class XClient:
                 f"レート制限に達しました (HTTP 429, reset={reset})。"
                 " 無料プランは投稿数の上限が厳しい点に注意してください。"
             )
+        if response.status_code == 403:
+            raise XApiError(
+                f"{action}が拒否されました (HTTP 403): {response.text}\n"
+                "  App permissions が Read and write になっているか、"
+                "権限変更後に Access Token を再発行したかを確認してください。"
+            )
         if response.status_code >= 400:
-            raise XApiError(f"投稿に失敗しました (HTTP {response.status_code}): {response.text}")
+            raise XApiError(f"{action}に失敗しました (HTTP {response.status_code}): {response.text}")
 
-        payload = response.json()
-        tweet_id = (payload.get("data") or {}).get("id")
-        if not tweet_id:
-            raise XApiError(f"応答にツイートIDが含まれていません: {payload}")
-        return str(tweet_id)
+        return response.json()
 
 
 def weighted_length(text: str) -> int:

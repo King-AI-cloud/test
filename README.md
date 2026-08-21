@@ -48,6 +48,9 @@ export X_API_SECRET=...
 export X_ACCESS_TOKEN=...
 export X_ACCESS_TOKEN_SECRET=...
 
+# 投稿せずに認証と生成が通るか確認する（最初にこれ）
+PYTHONPATH=src python -m x_autopost check
+
 # 生成だけして中身を確認（投稿しない・履歴も残さない）
 PYTHONPATH=src python -m x_autopost post --dry-run
 
@@ -63,9 +66,17 @@ PYTHONPATH=src python -m x_autopost history -n 20
 ### コマンド一覧
 
 ```
+x-autopost [-c CONFIG] check
 x-autopost [-c CONFIG] post [--dry-run] [--text TEXT] [--theme THEME] [--allow-duplicate]
 x-autopost [-c CONFIG] history [-n LIMIT]
 ```
+
+`check` は投稿を伴わない事前チェックです。
+
+1. X: `GET /2/users/me` を呼び、OAuth 認証が通るか（→ `@username` を表示）
+2. Claude: 実際に1件生成してみて、API キーとモデル設定が正しいか
+
+`check` が両方 OK なら、あとは write 権限だけが未確認の状態です。
 
 | オプション | 説明 |
 | --- | --- |
@@ -96,7 +107,9 @@ x-autopost [-c CONFIG] history [-n LIMIT]
      - cron: "0 10 * * *"  # 19:00 JST
    ```
 
-4. Actions タブから **X 自動投稿 → Run workflow** で手動実行して動作確認
+4. Actions タブから **疎通確認 (投稿しない) → Run workflow** を実行し、
+   Secrets とネットワークが通っているか確かめる
+5. **X 自動投稿 → Run workflow** で手動実行して動作確認
    （`dry_run` にチェックを入れれば投稿されません）
 
 ### 仕組み
@@ -165,3 +178,18 @@ python -m pytest -q
 ```
 
 外部 API は呼ばずにモックで検証しているため、API キーなしで実行できます。
+
+### テストで何を検証しているか
+
+`tests/test_integration_local.py` は、ローカルに立てたモック X API サーバに対して
+**実際の HTTP 往復** を行い、以下を確認しています。
+
+| 検証項目 | 内容 |
+| --- | --- |
+| リクエスト形状 | `POST /2/tweets`、`Content-Type: application/json`、ボディ `{"text": ...}` |
+| OAuth 1.0a 署名 | 受信側で RFC 5849 §3.4 に沿って HMAC-SHA1 を計算し直し、送信された `oauth_signature` と一致することを確認（鍵を変えると一致しないことも確認） |
+| エラー変換 | 401 / 403 / 429 がそれぞれ適切な日本語メッセージになるか |
+| Anthropic リクエスト | SDK が実際に送る JSON ボディ（`model` / `thinking` / `output_config` / `fallbacks` / beta ヘッダ）を検証 |
+| 通し実行 | 生成 → 署名付き HTTP 投稿 → `history.json` 記録 まで CLI 経由で一気通貫 |
+
+本番との差分は「宛先ホストが本物か」と「資格情報が本物か」の2点だけです。
